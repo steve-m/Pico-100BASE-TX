@@ -6,9 +6,9 @@
 ; SPDX-License-Identifier: BSD-3-Clause
 ;
 ; MLT3 PIO program for 100Base-TX output
+; based on 1-cycle-per-symbol output idea by Tuomo Talala
 ;
-; PIO SM needs to run at 250 MHz PIO clock, 2 cycles per bit resulting
-; in 125 MHz output
+; PIO SM needs to run at 125 MHz PIO clock
 ;
 
 .pio_version 0
@@ -16,27 +16,19 @@
 .side_set 2
 
 public entry_point:
-
-	; clear x
-	mov x, null		side 0
-
 .wrap_target
 	null1:
-		out x, 1	side 0
-		jmp !x null1	side 0
+		jmp pin null1	side 0
 	plus:
-		out x, 1	side 1
-		jmp !x plus	side 1
+		jmp pin plus	side 1
 	null2:
-		out x, 1	side 0
-		jmp !x null2	side 0
+		jmp pin null2	side 0
 	minus:
-		out x, 1	side 2
-		jmp !x minus	side 2
+		jmp pin minus	side 2
 .wrap
 
 % c-sdk {
-static inline void mlt3_output_program_init(PIO pio, uint sm, uint offset, uint pin)
+static inline void mlt3_output_program_init(PIO pio, uint sm, uint offset, uint pin, uint jmp_pin)
 {
 	pio_sm_config c = mlt3_output_program_get_default_config(offset);
 
@@ -47,29 +39,11 @@ static inline void mlt3_output_program_init(PIO pio, uint sm, uint offset, uint 
 	pio_sm_set_consecutive_pindirs(pio, sm, pin, 2, true);
 	pio_gpio_init(pio, pin);
 	pio_gpio_init(pio, pin+1);
+	sm_config_set_jmp_pin(&c, jmp_pin);
 
-	sm_config_set_in_shift(
-		&c,
-		false,	// Shift-to-right = false (i.e. shift to left)
-		false,	// Autopush disabled
-		32	// Autopush threshold: ignored
-	);
-
-	sm_config_set_out_shift(
-		&c,
-		false,	// Shift-to-right = false (i.e. shift to left)
-		true,	// Autopull enabled
-		30	// Autopull threshold, six 5 bit symbols per word
-	);
-
-	// We only transmit, so disable the RX FIFO to make the TX FIFO deeper.
-	sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
-
-	// We need to run at 250 MHz
 	sm_config_set_clkdiv(&c, 1.f);
 
 	// Load our configuration, and start the program from the beginning
 	pio_sm_init(pio, sm, offset, &c);
-//	pio_sm_set_enabled(pio, sm, true);
 }
 %}

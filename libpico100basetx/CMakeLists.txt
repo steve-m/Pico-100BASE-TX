@@ -18,3 +18,4 @@ target_link_libraries(libpico100basetx INTERFACE
 	)
 
 pico_generate_pio_header(libpico100basetx ${CMAKE_CURRENT_LIST_DIR}/mlt3_out.pio)
+pico_generate_pio_header(libpico100basetx ${CMAKE_CURRENT_LIST_DIR}/pin_out.pio)

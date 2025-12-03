@@ -42,7 +42,7 @@
 #include "pico100basetx.h"
 #include "counter.pio.h"
 
-#define SYS_CLK		250000
+#define SYS_CLK		125000
 
 #define DMACH_PIO_PING	0
 #define DMACH_PIO_PONG	1

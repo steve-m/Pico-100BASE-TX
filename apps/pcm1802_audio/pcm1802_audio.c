@@ -43,7 +43,7 @@
 #include "pico100basetx.h"
 #include "pcm1802_fmt00.pio.h"
 
-#define SYS_CLK			250000
+#define SYS_CLK			125000
 
 #define AUDIO_DATA_LEN		((RBUF_MAX_DATA_LEN / sizeof(uint32_t)) - 1)
 #define AUDIO_RBUF_SLICES	RBUF_DEFAULT_NUM

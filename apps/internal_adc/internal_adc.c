@@ -42,7 +42,7 @@
 
 #include "pico100basetx.h"
 
-#define SYS_CLK		250000
+#define SYS_CLK		125000
 
 // Channel 2 is GPIO28
 #define CAPTURE_GPIO	28

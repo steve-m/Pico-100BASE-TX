@@ -39,6 +39,7 @@
 #include "pico/unique_id.h"
 #include "pico100basetx.h"
 #include "mlt3_out.pio.h"
+#include "pin_out.pio.h"
 
 /* we want to use the top DMA channels, so the application
  * can use the bottom ones */
@@ -55,6 +56,9 @@
 	#define MLT_DMA_IRQ	(DMA_IRQ_3)
 	#define MLT_OUT_PIO	(pio2)
 #endif
+
+/* for PIO inter-SM communication - can be any unused GPIO */
+#define DUMMY_OUT_PIN	3
 
 typedef struct
 {
@@ -131,7 +135,7 @@ void init_scrambler_lut(void)
 		lfsr_lut[i] = 0;
 
 		for (int j = 0; j < 30; j++)
-			lfsr_lut[i] |= !scramble(0) << (31-j);
+			lfsr_lut[i] |= scramble(0) << (31-j);
 	}
 }
 
@@ -411,7 +415,11 @@ void init_mlt3_output(int base_pin)
 
 	uint offset = pio_add_program(pio, &mlt3_output_program);
 	uint sm_data = pio_claim_unused_sm(pio, true);
-	mlt3_output_program_init(pio, sm_data, offset, base_pin);
+	mlt3_output_program_init(pio, sm_data, offset, base_pin, DUMMY_OUT_PIN);
+
+	offset = pio_add_program(pio, &pin_output_program);
+	sm_data = pio_claim_unused_sm(pio, true);
+	pin_output_program_init(pio, sm_data, offset, DUMMY_OUT_PIN);
 
 	dma_channel_config c;
 	c = dma_channel_get_default_config(DMACH_MLT_PING);
@@ -453,7 +461,8 @@ void init_mlt3_output(int base_pin)
 	dma_hw->inte3 |= (1u << DMACH_MLT_PING) | (1u << DMACH_MLT_PONG);
 #endif
 
-	pio_sm_set_enabled(pio, sm_data, true);
+	/* synchronously start both state machines */
+	pio_set_sm_mask_enabled(pio, 3, true);
 }
 
 void __scratch_y("") pico100basetx_update_head(int stream_id, int head)

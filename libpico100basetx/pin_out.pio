@@ -1,0 +1,48 @@
+;
+; Pico-100BASE-TX, a bit-banged 100Base-TX Ethernet MAC+PHY and UDP transmitter
+;
+; Copyright (c) 2025 Steve Markgraf <steve@steve-m.de>
+;
+; SPDX-License-Identifier: BSD-3-Clause
+;
+; Pin PIO program for 100Base-TX output
+; based on 1-cycle-per-symbol output idea by Tuomo Talala
+;
+; PIO SM needs to run at 125 MHz PIO clock
+;
+
+.pio_version 0
+.program pin_output
+
+public entry_point:
+.wrap_target
+	out pins, 1
+.wrap
+
+% c-sdk {
+static inline void pin_output_program_init(PIO pio, uint sm, uint offset, uint pin)
+{
+	pio_sm_config c = pin_output_program_get_default_config(offset);
+
+	pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, true);
+	pio_gpio_init(pio, pin);
+
+	// Set the OUT base pin to the provided `pin` parameter.
+	sm_config_set_out_pins(&c, pin, 1);
+
+	sm_config_set_out_shift(
+		&c,
+		false,	// Shift-to-right = false (i.e. shift to left)
+		true,	// Autopull enabled
+		30	// Autopull threshold, six 5 bit symbols per word
+	);
+
+	// We only transmit, so disable the RX FIFO to make the TX FIFO deeper.
+	sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+
+	sm_config_set_clkdiv(&c, 1.f);
+
+	// Load our configuration, and start the program from the beginning
+	pio_sm_init(pio, sm, offset, &c);
+}
+%}
