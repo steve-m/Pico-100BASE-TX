@@ -1,0 +1,154 @@
+/*
+ * Pico-100BASE-TX, a bit-banged 100Base-TX Ethernet MAC+PHY and UDP transmitter
+ *
+ * Internal ADC example, overclocked to 2 MHz sample rate
+ *
+ * Copyright (c) 2024-2025 by Steve Markgraf <steve@steve-m.de>
+ *
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the author nor the names of its contributors may
+ *    be used to endorse or promote products derived from this software
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS "AS IS" AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ */
+
+#include "pico/stdlib.h"
+#include "hardware/clocks.h"
+#include "hardware/irq.h"
+#include "hardware/sync.h"
+#include "hardware/vreg.h"
+#include "hardware/dma.h"
+#include "hardware/adc.h"
+#include "hardware/pll.h"
+
+#include "pico100basetx.h"
+
+#define OVERCLOCK 1
+
+#define SYS_CLK		250000
+#define ADC_SAMPLE_RATE	2000000
+
+// Channel 2 is GPIO28
+#define CAPTURE_GPIO	28
+#define CAPTURE_CHANNEL	2
+
+#define DMACH_ADC_PING	0
+#define DMACH_ADC_PONG	1
+
+static bool dma_adc_pong = false;
+struct udp_frame ringbuffer[RBUF_DEFAULT_NUM];
+int ringbuf_head = 2;
+
+void __scratch_y("") adc_dma_irq_handler()
+{
+	uint ch_num = dma_adc_pong ? DMACH_ADC_PONG : DMACH_ADC_PING;
+	dma_channel_hw_t *ch = &dma_hw->ch[ch_num];
+	dma_hw->intr = 1u << ch_num;
+	dma_adc_pong = !dma_adc_pong;
+
+	ringbuf_head = (ringbuf_head + 1) % RBUF_DEFAULT_NUM;
+
+	ch->write_addr = (uintptr_t)&ringbuffer[ringbuf_head].data;
+	ch->transfer_count = RBUF_MAX_DATA_LEN / sizeof(uint16_t);
+
+	pico100basetx_update_head(0, ringbuf_head);
+}
+
+void init_adc_input(void)
+{
+	adc_init();
+	adc_gpio_init(CAPTURE_GPIO);
+	adc_select_input(CAPTURE_CHANNEL);
+
+	adc_fifo_setup(
+		true,	// Write each completed conversion to the sample FIFO
+		true,	// Enable DMA data request (DREQ)
+		1,	// DREQ (and IRQ) asserted when at least 1 sample present
+		true,	// Disable the ERR bit
+		false	// No shift of samples, use full 12 bit resolution
+	);
+
+	/* 240 MHz clk_adc / (119 + 1) = 2 MSPS */
+	adc_set_clkdiv(119);
+
+	dma_channel_config c;
+	c = dma_channel_get_default_config(DMACH_ADC_PING);
+	channel_config_set_chain_to(&c, DMACH_ADC_PONG);
+	channel_config_set_dreq(&c, DREQ_ADC);
+	channel_config_set_read_increment(&c, false);
+	channel_config_set_write_increment(&c, true);
+	channel_config_set_transfer_data_size(&c, DMA_SIZE_16);
+
+	dma_channel_configure(
+		DMACH_ADC_PING,
+		&c,
+		&ringbuffer[0].data,
+		&adc_hw->fifo,
+		RBUF_MAX_DATA_LEN / sizeof(uint16_t),
+		false
+	);
+	c = dma_channel_get_default_config(DMACH_ADC_PONG);
+	channel_config_set_chain_to(&c, DMACH_ADC_PING);
+	channel_config_set_dreq(&c, DREQ_ADC);
+	channel_config_set_read_increment(&c, false);
+	channel_config_set_write_increment(&c, true);
+	channel_config_set_transfer_data_size(&c, DMA_SIZE_16);
+
+	dma_channel_configure(
+		DMACH_ADC_PONG,
+		&c,
+		&ringbuffer[1].data,
+		&adc_hw->fifo,
+		RBUF_MAX_DATA_LEN / sizeof(uint16_t),
+		false
+	);
+
+	dma_hw->ints0 |= (1u << DMACH_ADC_PING) | (1u << DMACH_ADC_PONG);
+	dma_hw->inte0 |= (1u << DMACH_ADC_PING) | (1u << DMACH_ADC_PONG);
+	irq_set_exclusive_handler(DMA_IRQ_0, adc_dma_irq_handler);
+	irq_set_enabled(DMA_IRQ_0, true);
+
+	dma_channel_start(DMACH_ADC_PING);
+	adc_run(true);
+}
+
+int main()
+{
+	set_sys_clock_khz(SYS_CLK, true);
+
+#ifdef OVERCLOCK
+	pll_init(pll_usb, 1, 960 * MHZ, 2, 2);
+
+	/* set USB clock to clk_usb/4 */
+	hw_write_masked(&clocks_hw->clk[clk_usb].div, 10 << CLOCKS_CLK_USB_DIV_INT_LSB, CLOCKS_CLK_USB_DIV_INT_BITS);
+#endif
+
+	stdio_init_all();
+
+	pico100basetx_init(0);
+	pico100basetx_add_stream(0, 1, ADC_SAMPLE_RATE, RBUF_MAX_DATA_LEN, RBUF_DEFAULT_NUM, ringbuffer);
+	pico100basetx_start();
+	init_adc_input();
+
+	while (1)
+		__wfi();
+}

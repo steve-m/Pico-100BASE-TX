@@ -1,3 +1,4 @@
 add_subdirectory(counter)
 add_subdirectory(pcm1802_audio)
 add_subdirectory(internal_adc)
+add_subdirectory(internal_adc_lw_mw_am)
